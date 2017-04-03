@@ -13,7 +13,9 @@
 #include "ModbusClient.h"
 
 #define VERSION_MAJOR 0
-#define VERSION_MINOR 1
+#define VERSION_MINOR 2
+
+#define LED_PIN 13
 
 #define MODBUS_RX_PIN 10      // Marked D10 on nano board
 #define MODBUS_TX_PIN 11      // Marked D11 on nano board
@@ -23,7 +25,7 @@
 #define MODBUS_RX_TIMEOUT 1000
 #define MODBUS_CHAR_TIMEOUT 100
 
-#define POLL_TIME 1000
+#define POLL_TIME 350
 
 #define SERIAL_BAUDRATE 19200 // For console interface
 
@@ -75,6 +77,7 @@ void setup_modbus() {
   testPacket.address = 4099;
   testPacket.no_of_registers = 1;
   testPacket.register_array = NULL;
+  makeModbusFrame();
 }
 
 void setup_LCD() {
@@ -89,7 +92,7 @@ void setup_LCD() {
   } // if
 
   lcd.begin(LCD_CPL, LCD_LINES); // initialize the lcd
-  lcd.setBacklight(255);
+  lcd.setBacklight(1);
   lcd.home();
   lcd.clear();
 }
@@ -98,10 +101,14 @@ void setup() {
   setup_serial();
   setup_LCD();
   setup_modbus();
+
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
 }
 
 void modbusWrite(unsigned char *txBuf, unsigned int txLen) { 
 
+  digitalWrite(LED_PIN, HIGH);
   // switch 485 driver to TX
   digitalWrite(MODBUS_TX_ENABLE_PIN, HIGH);
 
@@ -119,17 +126,17 @@ void modbusWrite(unsigned char *txBuf, unsigned int txLen) {
 
   // switch 485 driver to RX
   digitalWrite(MODBUS_TX_ENABLE_PIN, LOW);
-  
+  digitalWrite(LED_PIN, LOW);
 }
 
-int modbusRead(unsigned int timeout) {
+int modbusRead(unsigned long timeout) {
   unsigned char rx_byte;
   bool rx_has_started = false;
   unsigned int rx_count = 0;
 
-  unsigned int rx_timeout = millis() + timeout;
+  unsigned long rx_timeout = millis() + timeout;
 
-  // wait for first byte
+  // wait for first byte to arrive
   while (millis() < rx_timeout) {
     if (modbusSerial.available()) {
       rx_byte = modbusSerial.read();
@@ -140,11 +147,12 @@ int modbusRead(unsigned int timeout) {
   }
 
   // has timeout occured?
-  if (!rx_has_started)
+  if (!rx_has_started) {
     return -1;
+  }
 
-  unsigned int char_timeout = millis() + MODBUS_CHAR_TIMEOUT;
-
+  unsigned long char_timeout = millis() + MODBUS_CHAR_TIMEOUT;
+  
   while (millis() < char_timeout) {
     if (modbusSerial.available()) {
       rx_byte = modbusSerial.read();
@@ -158,16 +166,21 @@ int modbusRead(unsigned int timeout) {
   return rx_count;
 }
 
+void makeModbusFrame() {
+  constructFrame(&testPacket);
+  modbusTxLen = getFrame(&modbusTxBuf);
+}
+
 void loop() {
   int i;
   int rxLen = 0;
-  //mobusSerial.println("This the Modbus port speaking");
 
-  lcd.setBacklight(1);
-
-  delay(POLL_TIME);
   constructFrame(&testPacket);
   modbusTxLen = getFrame(&modbusTxBuf);
+  //makeModbusFrame();
+  //mobusSerial.println("This the Modbus port speaking");
+
+  delay(POLL_TIME);
 
   lcd.home();
   lcd.print("Modbus: ");
@@ -188,17 +201,13 @@ void loop() {
   rxLen = modbusRead(MODBUS_RX_TIMEOUT);
   lcd.setCursor(0, 1);
   lcd.print("  ");
-
-  lcd.setCursor(0, 3);
-  lcd.print(txCount);
-  
+ 
   if (rxLen > 0) {
     debug("Modbus RX %d bytes: ", rxLen);
     for (i=0; i<rxLen; i++) {
       debug("<%02X> ", modbusRxBuf[i]);
     }
-    debug("\n");
-    
+    debug("\n");   
   }
 
   lcd.setCursor(13, 0);
@@ -211,7 +220,6 @@ void loop() {
     delay(400);
     lcd.setBacklight(1);
   }
-
   
   /*
     if (show == 0) {
