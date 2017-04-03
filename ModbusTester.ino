@@ -31,6 +31,7 @@
 #define LCD_LINES 4
 #define LCD_CPL 20    // Characters per line
 
+int txCount = 0;
 int modbusSvrAddress = 12;
 ModbusPacket testPacket;
 unsigned char *modbusTxBuf;
@@ -176,6 +177,7 @@ void loop() {
     lcd.setCursor(0, 1);
     lcd.print("TX");
     modbusWrite(modbusTxBuf, modbusTxLen);
+    txCount++;
     lcd.setCursor(0, 1);
     lcd.print("  ");
   }
@@ -186,6 +188,9 @@ void loop() {
   rxLen = modbusRead(MODBUS_RX_TIMEOUT);
   lcd.setCursor(0, 1);
   lcd.print("  ");
+
+  lcd.setCursor(0, 3);
+  lcd.print(txCount);
   
   if (rxLen > 0) {
     debug("Modbus RX %d bytes: ", rxLen);
