@@ -13,7 +13,15 @@
 #include "ModbusClient.h"
 
 #define VERSION_MAJOR 0
-#define VERSION_MINOR 2
+#define VERSION_MINOR 3
+
+enum userinput {
+  LowLow,
+  Low,
+  Middle,
+  High,
+  HighHigh,
+};
 
 #define LED_PIN 13
 
@@ -33,12 +41,22 @@
 #define LCD_LINES 4
 #define LCD_CPL 20    // Characters per line
 
+#define UI_INTERVAL 200
+#define UI_H 712
+#define UI_HH UI_H + UI_INTERVAL
+#define UI_L 312
+#define UI_LL UI_L - UI_INTERVAL
+#define UI_INPUT_PIN A0
+
 int txCount = 0;
-int modbusSvrAddress = 12;
+int modbusSvrAddress = 50;
 ModbusPacket testPacket;
 unsigned char *modbusTxBuf;
 unsigned char modbusRxBuf[MODBUS_RX_BUF_LEN];
 int modbusTxLen;
+bool runMode = true;
+bool configMode = false;
+userinput inputState = Middle;
 
 SoftwareSerial modbusSerial(MODBUS_RX_PIN, MODBUS_TX_PIN); // RX, TX
 LiquidCrystal_PCF8574 lcd(LCD_I2C_ADDRESS);  // set the LCD address 
@@ -57,13 +75,26 @@ void debug(char *sFmt, ...)
   return;
 }
 
+void lcdPrint(char *sFmt, ...)
+{
+  char acTmp[128];       // place holder for sprintf output
+  va_list args;          // args variable to hold the list of parameters
+  va_start(args, sFmt);  // mandatory call to initilase args 
+
+  vsprintf(acTmp, sFmt, args);
+  lcd.print(acTmp);
+  // mandatory tidy up
+  va_end(args);
+  return;
+}
+
 void setup_serial() {
   // Open serial communications and wait for port to open:
   Serial.begin(SERIAL_BAUDRATE);
   while (!Serial) {
     ; // wait for serial port to connect. Needed for native USB port only
   }
-  debug("Modbus Tester V%d.%d\n", VERSION_MAJOR, VERSION_MINOR);
+  debug("Modbus Scanner V%d.%d\n", VERSION_MAJOR, VERSION_MINOR);
 }
 
 void setup_modbus() {
@@ -95,6 +126,8 @@ void setup_LCD() {
   lcd.setBacklight(1);
   lcd.home();
   lcd.clear();
+  lcd.print("Modbus: ");
+  lcd.print(modbusSvrAddress);
 }
 
 void setup() {
@@ -171,20 +204,103 @@ void makeModbusFrame() {
   modbusTxLen = getFrame(&modbusTxBuf);
 }
 
-void loop() {
+void lcdShowInfo (int lineNo) {
+  lcd.setCursor(0, lineNo);
+  lcdPrint("Modbus Scanner V%d.%d", VERSION_MAJOR, VERSION_MINOR);
+  lcd.setCursor(0, lineNo+1);
+  lcd.print("(C)2017 Erwin Bejsta");
+}
+
+void inputRead() {
+  int  sensorValue = analogRead(UI_INPUT_PIN);
+  //Serial.println(sensorValue);
+
+  if ( sensorValue > UI_H ) {
+    if ( sensorValue > UI_HH ) {
+      inputState = HighHigh;
+      //Serial.println("++");
+    } else {
+      inputState = High;
+      //Serial.println("+");
+    }
+  } else {
+    if ( sensorValue < UI_L ) {
+      if ( sensorValue < UI_LL ) {
+        inputState = LowLow;
+        //Serial.println("--");
+      } else {
+        inputState = Low;
+        //Serial.println("-");
+      }
+    } else {
+      inputState = Middle;
+    }
+  }
+}
+
+void configLoop() {
+
+  if (!configMode) {   
+    lcd.setBacklight(1);
+    
+    lcd.clear();
+    lcdShowInfo(2);
+    //lcd.setCursor(0, 0);
+    lcd.home();
+    lcd.print("Modbus:");
+  } else {
+    switch (inputState) {
+      case Low:
+        modbusSvrAddress--;
+        delay(450);
+        break;
+      case LowLow:
+        modbusSvrAddress--;
+        delay(200);
+        break;
+      case High:
+        modbusSvrAddress++;
+        delay(450);
+        break;
+      case HighHigh:
+        modbusSvrAddress++;
+        delay(200);
+        break;
+      default:
+        break;
+    }
+    if (modbusSvrAddress > 127) modbusSvrAddress = 127;
+    if (modbusSvrAddress < 1) modbusSvrAddress = 1;
+  }
+  lcd.setCursor(8, 0);
+  runMode = false;
+  configMode = true;
+  lcd.print(modbusSvrAddress);
+  lcd.print("   ");
+}
+
+void runLoop() {
+
   int i;
   int rxLen = 0;
 
-  constructFrame(&testPacket);
-  modbusTxLen = getFrame(&modbusTxBuf);
-  //makeModbusFrame();
-  //mobusSerial.println("This the Modbus port speaking");
+  if (!runMode) {
+    lcd.clear();
+    lcd.home();
+    lcd.print("Modbus: ");
+    lcd.print(modbusSvrAddress);
+    lcd.setCursor(0, 3);
+    lcdPrint("Modbus Scanner V%d.%d", VERSION_MAJOR, VERSION_MINOR);
+  }
+  
+  runMode = true;
+  configMode = false;
 
   delay(POLL_TIME);
 
-  lcd.home();
-  lcd.print("Modbus: ");
-  lcd.print(modbusSvrAddress);
+  constructFrame(&testPacket);
+  modbusTxLen = getFrame(&modbusTxBuf);
+
   
   if (modbusTxLen > 2) {
     lcd.setCursor(0, 1);
@@ -215,12 +331,22 @@ void loop() {
     lcd.print("OK    ");
   }
   else {
-    lcd.print("FAILED");
+    lcd.print("NO GO ");
     lcd.setBacklight(0);
     delay(400);
     lcd.setBacklight(1);
+  } 
+}
+
+
+void loop() {
+  inputRead();
+  if (inputState == Middle) {
+    runLoop();
+  } else {
+    configLoop();
   }
-  
+
   /*
     if (show == 0) {
     lcd.setBacklight(255);
