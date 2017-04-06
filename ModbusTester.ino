@@ -13,7 +13,7 @@
 #include "ModbusClient.h"
 
 #define VERSION_MAJOR 0
-#define VERSION_MINOR 3
+#define VERSION_MINOR 4
 
 enum userinput {
   LowLow,
@@ -200,6 +200,13 @@ int modbusRead(unsigned long timeout) {
 }
 
 void makeModbusFrame() {
+  
+  testPacket.id = modbusSvrAddress;
+  testPacket.function = READ_HOLDING_REGISTERS;
+  testPacket.address = 4099;
+  testPacket.no_of_registers = 1;
+  testPacket.register_array = NULL;
+  
   constructFrame(&testPacket);
   modbusTxLen = getFrame(&modbusTxBuf);
 }
@@ -249,34 +256,45 @@ void configLoop() {
     lcd.home();
     lcd.print("Modbus:");
   } else {
+    // change modbus address
     switch (inputState) {
       case Low:
-        modbusSvrAddress--;
-        delay(450);
-        break;
       case LowLow:
         modbusSvrAddress--;
-        delay(200);
         break;
       case High:
-        modbusSvrAddress++;
-        delay(450);
-        break;
       case HighHigh:
         modbusSvrAddress++;
+        break;
+      default:
+        break;
+    }
+    
+    // range check modbus address
+    if (modbusSvrAddress > 127) modbusSvrAddress = 127;
+    if (modbusSvrAddress < 1) modbusSvrAddress = 1;
+
+     // display modbus address
+    lcd.setCursor(8, 0);
+    lcd.print(modbusSvrAddress);
+    lcd.print("   ");
+
+    // delay
+    switch (inputState) {
+      case Low:
+      case High:
+        delay(600);
+        break;
+      case LowLow:
+      case HighHigh:
         delay(200);
         break;
       default:
         break;
     }
-    if (modbusSvrAddress > 127) modbusSvrAddress = 127;
-    if (modbusSvrAddress < 1) modbusSvrAddress = 1;
   }
-  lcd.setCursor(8, 0);
   runMode = false;
   configMode = true;
-  lcd.print(modbusSvrAddress);
-  lcd.print("   ");
 }
 
 void runLoop() {
@@ -291,6 +309,7 @@ void runLoop() {
     lcd.print(modbusSvrAddress);
     lcd.setCursor(0, 3);
     lcdPrint("Modbus Scanner V%d.%d", VERSION_MAJOR, VERSION_MINOR);
+    makeModbusFrame();
   }
   
   runMode = true;
