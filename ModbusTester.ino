@@ -9,11 +9,16 @@
  */ 
 #include <SoftwareSerial.h>
 #include <Wire.h> 
+#include <EEPROM.h>
+
 #include "LiquidCrystal_PCF8574.h"
 #include "ModbusClient.h"
 
 #define VERSION_MAJOR 0
 #define VERSION_MINOR 4
+
+// EEPROM storage byte addresses
+#define EEPROM_MODBUS_SVR_ADDR 0
 
 enum userinput {
   LowLow,
@@ -32,6 +37,8 @@ enum userinput {
 #define MODBUS_RX_BUF_LEN 128
 #define MODBUS_RX_TIMEOUT 1000
 #define MODBUS_CHAR_TIMEOUT 100
+
+#define DEFAULT_MODBUS_SVR_ADDRESS 50   // used when EEPROM is invalid
 
 #define POLL_TIME 350
 
@@ -98,11 +105,18 @@ void setup_serial() {
 }
 
 void setup_modbus() {
-    // Open Modbus port
+  // Open Modbus port
   // set the data rate for the Modbus port
   modbusSerial.begin(MODBUS_BAUDRATE);
   pinMode(MODBUS_TX_ENABLE_PIN, OUTPUT);
   digitalWrite(MODBUS_TX_ENABLE_PIN, LOW);
+
+  // get modbus address from EEPROM
+  modbusSvrAddress = EEPROM.read(EEPROM_MODBUS_SVR_ADDR);
+  if ( (modbusSvrAddress <1) || (modbusSvrAddress >127) ) {
+    modbusSvrAddress = DEFAULT_MODBUS_SVR_ADDRESS;
+  }
+  
   testPacket.id = modbusSvrAddress;
   testPacket.function = READ_HOLDING_REGISTERS;
   testPacket.address = 4099;
@@ -302,6 +316,7 @@ void runLoop() {
   int i;
   int rxLen = 0;
 
+  // execute once when switching into run mode
   if (!runMode) {
     lcd.clear();
     lcd.home();
@@ -310,17 +325,16 @@ void runLoop() {
     lcd.setCursor(0, 3);
     lcdPrint("Modbus Scanner V%d.%d", VERSION_MAJOR, VERSION_MINOR);
     makeModbusFrame();
-  }
-  
-  runMode = true;
-  configMode = false;
+    runMode = true;
+    configMode = false;
+    EEPROM.write(EEPROM_MODBUS_SVR_ADDR, modbusSvrAddress);
+  }  
 
   delay(POLL_TIME);
 
   constructFrame(&testPacket);
   modbusTxLen = getFrame(&modbusTxBuf);
 
-  
   if (modbusTxLen > 2) {
     lcd.setCursor(0, 1);
     lcd.print("TX");
