@@ -28,6 +28,26 @@ enum userinput {
   HighHigh,
 };
 
+enum baudrate {
+  b300,
+  b600,
+  b1200,
+  b2400,
+  b4800,
+  b9600,
+  b19200,
+  b38400,
+  b56800
+};
+
+typedef struct  {
+  uint16_t  baudrate;
+  byte dataFunction;            // e.g. 3=Read Holding
+  int16_t dataRegister;
+  byte dataLength;              // number of registers
+  byte dataFormat;
+} modbusparameter;
+
 #define LED_PIN 13
 
 #define MODBUS_RX_PIN 10      // Marked D10 on nano board
@@ -64,6 +84,9 @@ int modbusTxLen;
 bool runMode = true;
 bool configMode = false;
 userinput inputState = Middle;
+
+modbusparameter modbusWestmont, modbusCustom;
+modbusparameter *activeModbusConfig = &modbusWestmont;
 
 SoftwareSerial modbusSerial(MODBUS_RX_PIN, MODBUS_TX_PIN); // RX, TX
 LiquidCrystal_PCF8574 lcd(LCD_I2C_ADDRESS);  // set the LCD address 
@@ -105,6 +128,13 @@ void setup_serial() {
 }
 
 void setup_modbus() {
+  // Westmont modbus parameters
+  modbusWestmont.baudrate = 19200;
+  modbusWestmont.dataFunction = READ_HOLDING_REGISTERS;
+  modbusWestmont.dataRegister = 4099;
+  modbusWestmont.dataLength = 1;
+  modbusWestmont.dataFormat = 0;
+  
   // Open Modbus port
   // set the data rate for the Modbus port
   modbusSerial.begin(MODBUS_BAUDRATE);
@@ -118,9 +148,9 @@ void setup_modbus() {
   }
   
   testPacket.id = modbusSvrAddress;
-  testPacket.function = READ_HOLDING_REGISTERS;
-  testPacket.address = 4099;
-  testPacket.no_of_registers = 1;
+  testPacket.function = activeModbusConfig->dataFunction;
+  testPacket.address = activeModbusConfig->dataRegister;
+  testPacket.no_of_registers = activeModbusConfig->dataLength;
   testPacket.register_array = NULL;
   makeModbusFrame();
 }
