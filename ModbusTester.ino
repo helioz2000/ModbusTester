@@ -1,11 +1,15 @@
 /*
- Modbus Tester
- Erwin Bejsta 2017
+ * Modbus Tester
+ * Erwin Bejsta 2017
  
- The circuit:
- Modbus RX is digital pin 10 
- Modbus TX is digital pin 11
- 
+ * The circuit:
+ * Modbus RX is digital pin 10 
+ * Modbus TX is digital pin 11
+ *
+ * 7KT1 1531:
+ * AEI - Active Energy Input Modbus Register 4119+4120
+ * AEE - Active Energy Export Modbus Reegister 4161+4162
+ * 32bit IEEE 754:2008 floating point format
  */ 
 #include <SoftwareSerial.h>
 #include <Wire.h> 
@@ -13,6 +17,7 @@
 
 #include "LiquidCrystal_PCF8574.h"
 #include "ModbusClient.h"
+#include "LCD_Menu.h"
 
 #define VERSION_MAJOR 0
 #define VERSION_MINOR 4
@@ -48,25 +53,29 @@ typedef struct  {
   byte dataFormat;
 } modbusparameter;
 
-#define LED_PIN 13
+// Hardware definitions
+#define LED_PIN LED_BUILTIN
+#define BUTTON_PIN 13
 
+// Modbus definitions
 #define MODBUS_RX_PIN 10      // Marked D10 on nano board
 #define MODBUS_TX_PIN 11      // Marked D11 on nano board
 #define MODBUS_TX_ENABLE_PIN  12  // Marked D12 on nano board
 #define MODBUS_BAUDRATE 19200
 #define MODBUS_RX_BUF_LEN 128
-#define MODBUS_RX_TIMEOUT 1000
-#define MODBUS_CHAR_TIMEOUT 100
+#define MODBUS_RX_TIMEOUT 1000UL    // ms
+#define MODBUS_CHAR_TIMEOUT 100UL   // ms
 
 #define DEFAULT_MODBUS_SVR_ADDRESS 50   // used when EEPROM is invalid
 
-#define POLL_TIME 350
+#define POLL_TIME 350UL           // ms
 
 #define SERIAL_BAUDRATE 19200 // For console interface
 
+// LCD display definition
 #define LCD_I2C_ADDRESS 0x3F
-#define LCD_LINES 4
-#define LCD_CPL 20    // Characters per line
+#define LCD_ROWS 4
+#define LCD_COLUMNS 20
 
 #define UI_INTERVAL 200
 #define UI_H 712
@@ -78,6 +87,7 @@ typedef struct  {
 int txCount = 0;
 int modbusSvrAddress = 50;
 ModbusPacket testPacket;
+LCD_Menu menu(LCD_ROWS, LCD_COLUMNS);
 unsigned char *modbusTxBuf;
 unsigned char modbusRxBuf[MODBUS_RX_BUF_LEN];
 int modbusTxLen;
@@ -166,7 +176,7 @@ void setup_LCD() {
     debug("Error: <%d> - LCD not found at I2C address 0x%X\n", error, LCD_I2C_ADDRESS );
   } // if
 
-  lcd.begin(LCD_CPL, LCD_LINES); // initialize the lcd
+  lcd.begin(LCD_COLUMNS, LCD_ROWS); // initialize the lcd
   lcd.setBacklight(1);
   lcd.home();
   lcd.clear();
@@ -174,11 +184,18 @@ void setup_LCD() {
   lcd.print(modbusSvrAddress);
 }
 
+void setup_encoder() {
+  // Encoder Setup
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  beginEncoder();
+}
+
 void setup() {
   setup_serial();
   setup_LCD();
   setup_modbus();
-
+  setup_encoder;
+  
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, LOW);
 }

@@ -1,83 +1,95 @@
+/*
+ * rotary encoder include 
+ * Erwn Bejsta April 2017
+ * heavily based on original file by 'jurs' from Arduino Forum https://forum.arduino.cc/index.php?topic=318170.msg2202599#msg2202599
+ * 
+ * 
+ * 
+ */
+
 #ifndef __ENCODER_H__
 #define __ENCODER_H__
 
-#include "WProgram.h"
+#include <Arduino.h>
 
-class Encoder {
-  /*  
-    wraps encoder setup and update functions in a class
+// Encoder pins
+#define ENCODER_A 18
+#define ENCODER_B 17
 
-    !!! NOTE : user must call the encoders update method from an
-    interrupt function himself! i.e. user must attach an interrupt to the
-    encoder pin A and call the encoder update method from within the 
-    interrupt
+volatile byte state_ISR;
+volatile int8_t count_ISR;
 
-    uses Arduino pull-ups on A & B channel outputs
-    turning on the pull-ups saves having to hook up resistors 
-    to the A & B channel outputs 
+// extern void debug(char *sFmt, ...);
 
-    // ------------------------------------------------------------------------------------------------
-    // Example usage :
-    // ------------------------------------------------------------------------------------------------
-        #include "Encoder.h"
+void startTimer2()  // start TIMER2 interrupts
+{
+  noInterrupts();
+  // Timer 2 CTC mode
+  TCCR2B = (1<<WGM22) | (1<<CS22)  | (1<<CS20);
+  TCCR2A = (1<<WGM21);
+  OCR2A = 124;   // 249==500,  124==1000 interrupts per second
+                 // 63 ==2000,  31==4000
+                 // 15 ==8000,   7==16000
+  TIMSK2 = (1<<OCIE2A); // enable Timer 2 interrupts
+  interrupts();
+}
 
-        Encoder encoder(2, 4);
+void stopTimer2() // stop TIMER2 interrupts
+{
+  noInterrupts();
+  TIMSK2 = 0;
+  interrupts();
+}
 
-        void setup() { 
-            attachInterrupt(0, doEncoder, CHANGE); 
-            Serial.begin (115200);
-            Serial.println("start");
-        } 
-
-        void loop(){
-            // do some stuff here - the joy of interrupts is that they take care of themselves
-        }
-
-        void doEncoder(){
-            encoder.update();
-            Serial.println( encoder.getPosition() );
-        }    
-    // ------------------------------------------------------------------------------------------------
-    // Example usage end
-    // ------------------------------------------------------------------------------------------------
+int8_t readEncoder()
+{ // this function is called within timer interrupt to read one encoder!
+  int8_t result=0;
+  byte state=state_ISR;
+  state= state<<2 | (byte)digitalRead(ENCODER_A)<<1 | (byte)digitalRead(ENCODER_B); 
+  state= state & 0xF;   // keep only the lower 4 bits
+  /*// next two lines would be code to read 'quarter steps'
+  if (state==0b0001 || state==0b0111 || state==0b1110 || state==0b1000) result= -1;
+  else if (state==0b0010 || state==0b1011 || state==0b1101 || state==0b0100) result= 1;
   */
-public:
+  // next two lines is code to read 'full steps'
+  if (state==0b0001) result= -1;
+  else if (state==0b0010) result= 1;
+  
+  state_ISR = state;
+  return result;
+}
 
-    // constructor : sets pins as inputs and turns on pullup resistors
+void beginEncoder()
+{ // active internal pullup resistors on each encoder pin and start timer2
+  pinMode(ENCODER_A, INPUT_PULLUP);
+  pinMode(ENCODER_B, INPUT_PULLUP);
+  readEncoder(); // Initialize start condition
+  startTimer2();
+}
 
-    Encoder( int8_t PinA, int8_t PinB) : pin_a ( PinA), pin_b( PinB ) {
-        // set pin a and b to be input 
-        pinMode(pin_a, INPUT); 
-        pinMode(pin_b, INPUT); 
-        // and turn on pull-up resistors
-        digitalWrite(pin_a, HIGH);    
-        digitalWrite(pin_b, HIGH);                 
-    };
+// called from main program
+// returns true if we have seen encoder pulses since last call
+// delta contains the number encoder pulses since last call 
+boolean updateEncoders(int8_t *delta)
+{ // read the 'volatile' ISR variables and pass it onto calling function
 
-    // call this from your interrupt function
+  if (count_ISR!=0)
+  {
+    noInterrupts();
+    *delta = count_ISR;
+    count_ISR=0;
+    interrupts();
+    return true;
+  } 
+  *delta = 0;
+  return false;
+}
 
-    void update () {
-        if (digitalRead(pin_a)) digitalRead(pin_b) ? position++ : position--;
-        else digitalRead(pin_b) ? position-- : position++;
-    };
 
-    // returns current position
-
-    long int getPosition () { return position; };
-
-    // set the position value
-
-    void setPosition ( const long int p) { position = p; };
-
-private:
-
-    long int position;
-
-    int8_t pin_a;
-
-    int8_t pin_b;
-};
-
+ISR(TIMER2_COMPA_vect)  // handling of TIMER2 interrupts
+{
+  count_ISR += readEncoder();
+}
 #endif // __ENCODER_H__
 
 
