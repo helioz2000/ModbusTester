@@ -13,8 +13,8 @@
 #include <Arduino.h>
 
 // Encoder pins
-#define ENCODER_A 18
-#define ENCODER_B 17
+#define ENCODER_A 3     // D3
+#define ENCODER_B 4     // D4
 
 volatile byte state_ISR;
 volatile int8_t count_ISR;

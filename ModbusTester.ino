@@ -18,13 +18,14 @@
 #include "LiquidCrystal_PCF8574.h"
 #include "ModbusClient.h"
 #include "LCD_Menu.h"
+#include "Encoder.h"
 
 #define VERSION_MAJOR 0
-#define VERSION_MINOR 4
+#define VERSION_MINOR 5
 
 // EEPROM storage byte addresses
 #define EEPROM_MODBUS_SVR_ADDR 0
-
+/*
 enum userinput {
   LowLow,
   Low,
@@ -32,7 +33,7 @@ enum userinput {
   High,
   HighHigh,
 };
-
+*/
 enum baudrate {
   b300,
   b600,
@@ -53,9 +54,12 @@ typedef struct  {
   byte dataFormat;
 } modbusparameter;
 
+#define BUTTON_DEBOUNCE_TIME 150UL        // ms
+#define BUTTON_LONGPRESS_TIME 600UL       // ms
+
 // Hardware definitions
 #define LED_PIN LED_BUILTIN
-#define BUTTON_PIN 13
+#define BUTTON_PIN 5          // D5
 
 // Modbus definitions
 #define MODBUS_RX_PIN 10      // Marked D10 on nano board
@@ -68,7 +72,7 @@ typedef struct  {
 
 #define DEFAULT_MODBUS_SVR_ADDRESS 50   // used when EEPROM is invalid
 
-#define POLL_TIME 350UL           // ms
+#define POLL_TIME 700UL           // ms
 
 #define SERIAL_BAUDRATE 19200 // For console interface
 
@@ -77,13 +81,6 @@ typedef struct  {
 #define LCD_ROWS 4
 #define LCD_COLUMNS 20
 
-#define UI_INTERVAL 200
-#define UI_H 712
-#define UI_HH UI_H + UI_INTERVAL
-#define UI_L 312
-#define UI_LL UI_L - UI_INTERVAL
-#define UI_INPUT_PIN A0
-
 int txCount = 0;
 int modbusSvrAddress = 50;
 ModbusPacket testPacket;
@@ -91,9 +88,16 @@ LCD_Menu menu(LCD_ROWS, LCD_COLUMNS);
 unsigned char *modbusTxBuf;
 unsigned char modbusRxBuf[MODBUS_RX_BUF_LEN];
 int modbusTxLen;
-bool runMode = true;
-bool configMode = false;
-userinput inputState = Middle;
+bool runMode = true, runModeShadow = true;
+bool configMode = false, configModeShadow = false;
+
+bool button_shadow = true;
+unsigned long button_time;
+unsigned long button_debounce_time = 0;
+bool button_activated, button_activated_long;
+unsigned long next_modbus_tx_time, modbus_rx_timeout, modbus_rx_char_timeout;
+bool modbus_rx_started;
+unsigned modbus_rx_count;
 
 modbusparameter modbusWestmont, modbusCustom;
 modbusparameter *activeModbusConfig = &modbusWestmont;
@@ -188,13 +192,17 @@ void setup_encoder() {
   // Encoder Setup
   pinMode(BUTTON_PIN, INPUT_PULLUP);
   beginEncoder();
+
+  button_activated = false;
+  button_activated_long = false;
+  button_shadow = false;
 }
 
 void setup() {
   setup_serial();
   setup_LCD();
   setup_modbus();
-  setup_encoder;
+  setup_encoder();
   
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, LOW);
@@ -223,41 +231,22 @@ void modbusWrite(unsigned char *txBuf, unsigned int txLen) {
   digitalWrite(LED_PIN, LOW);
 }
 
-int modbusRead(unsigned long timeout) {
-  unsigned char rx_byte;
-  bool rx_has_started = false;
-  unsigned int rx_count = 0;
+bool modbusRead() { // returns true when modbus reive is completed
 
-  unsigned long rx_timeout = millis() + timeout;
-
-  // wait for first byte to arrive
-  while (millis() < rx_timeout) {
+  // check if a byte has arrived
     if (modbusSerial.available()) {
-      rx_byte = modbusSerial.read();
-      rx_has_started = true;
-      modbusRxBuf[rx_count++] = rx_byte;
-      break;
+      // read and store received byte      
+      modbusRxBuf[modbus_rx_count++] = modbusSerial.read();
+      // maximum permissible time before we receive next byte
+      modbus_rx_char_timeout = millis() + MODBUS_CHAR_TIMEOUT;
+      // rx data stream has started
+      if (!modbus_rx_started) modbus_rx_started = true;      
     }
-  }
 
-  // has timeout occured?
-  if (!rx_has_started) {
-    return -1;
-  }
-
-  unsigned long char_timeout = millis() + MODBUS_CHAR_TIMEOUT;
+  // look for end of transmission by character timeout
+  if (modbus_rx_started && (millis() >= modbus_rx_char_timeout) ) return true;
   
-  while (millis() < char_timeout) {
-    if (modbusSerial.available()) {
-      rx_byte = modbusSerial.read();
-      modbusRxBuf[rx_count++] = rx_byte;
-      char_timeout = (millis() + MODBUS_CHAR_TIMEOUT);
-    }
-  }
-
-  modbusRxBuf[rx_count] = 0;    // end marker
-  
-  return rx_count;
+  return false;
 }
 
 void makeModbusFrame() {
@@ -279,36 +268,10 @@ void lcdShowInfo (int lineNo) {
   lcd.print("(C)2017 Erwin Bejsta");
 }
 
-void inputRead() {
-  int  sensorValue = analogRead(UI_INPUT_PIN);
-  //Serial.println(sensorValue);
-
-  if ( sensorValue > UI_H ) {
-    if ( sensorValue > UI_HH ) {
-      inputState = HighHigh;
-      //Serial.println("++");
-    } else {
-      inputState = High;
-      //Serial.println("+");
-    }
-  } else {
-    if ( sensorValue < UI_L ) {
-      if ( sensorValue < UI_LL ) {
-        inputState = LowLow;
-        //Serial.println("--");
-      } else {
-        inputState = Low;
-        //Serial.println("-");
-      }
-    } else {
-      inputState = Middle;
-    }
-  }
-}
+int8_t delta;
 
 void configLoop() {
-
-  if (!configMode) {   
+  if (!configModeShadow) {   
     lcd.setBacklight(1);
     
     lcd.clear();
@@ -316,55 +279,39 @@ void configLoop() {
     //lcd.setCursor(0, 0);
     lcd.home();
     lcd.print("Modbus:");
-  } else {
-    // change modbus address
-    switch (inputState) {
-      case Low:
-      case LowLow:
-        modbusSvrAddress--;
-        break;
-      case High:
-      case HighHigh:
-        modbusSvrAddress++;
-        break;
-      default:
-        break;
-    }
-    
-    // range check modbus address
-    if (modbusSvrAddress > 127) modbusSvrAddress = 127;
-    if (modbusSvrAddress < 1) modbusSvrAddress = 1;
-
-     // display modbus address
+    configModeShadow = true;
+    runModeShadow = false;
+    updateEncoders(&delta);   // clears any pending encoder counts
+    lcd.blink();
     lcd.setCursor(8, 0);
     lcd.print(modbusSvrAddress);
     lcd.print("   ");
+    lcd.setCursor(8, 0);
+  } else {
+    // change modbus address
+    if (updateEncoders(&delta)) {
+      modbusSvrAddress += delta;
+ 
+      // range check modbus address
+      if (modbusSvrAddress > 127) modbusSvrAddress = 127;
+      if (modbusSvrAddress < 1) modbusSvrAddress = 1;
 
-    // delay
-    switch (inputState) {
-      case Low:
-      case High:
-        delay(600);
-        break;
-      case LowLow:
-      case HighHigh:
-        delay(200);
-        break;
-      default:
-        break;
+      // display modbus address
+      lcd.blink();
+      lcd.setCursor(8, 0);
+      lcd.print(modbusSvrAddress);
+      lcd.print("   ");
+      lcd.setCursor(8, 0);
     }
   }
-  runMode = false;
-  configMode = true;
 }
 
 void runLoop() {
-
   int i;
-  int rxLen = 0;
 
   // execute once when switching into run mode
-  if (!runMode) {
+  if (!runModeShadow) {
+    lcd.noBlink();
     lcd.clear();
     lcd.home();
     lcd.print("Modbus: ");
@@ -372,120 +319,109 @@ void runLoop() {
     lcd.setCursor(0, 3);
     lcdPrint("Modbus Scanner V%d.%d", VERSION_MAJOR, VERSION_MINOR);
     makeModbusFrame();
-    runMode = true;
-    configMode = false;
+    runModeShadow = true;
+    configModeShadow = false;
     EEPROM.write(EEPROM_MODBUS_SVR_ADDR, modbusSvrAddress);
-  }  
-
-  delay(POLL_TIME);
-
-  constructFrame(&testPacket);
-  modbusTxLen = getFrame(&modbusTxBuf);
-
-  if (modbusTxLen > 2) {
-    lcd.setCursor(0, 1);
-    lcd.print("TX");
-    modbusWrite(modbusTxBuf, modbusTxLen);
-    txCount++;
-    lcd.setCursor(0, 1);
-    lcd.print("  ");
+    next_modbus_tx_time = millis() + POLL_TIME;
   }
 
-  lcd.setCursor(0, 1);
-  lcd.print("RX");
-  modbusRxBuf[0] = 0;
-  rxLen = modbusRead(MODBUS_RX_TIMEOUT);
-  lcd.setCursor(0, 1);
-  lcd.print("  ");
- 
-  if (rxLen > 0) {
-    debug("Modbus RX %d bytes: ", rxLen);
-    for (i=0; i<rxLen; i++) {
+  if (millis() >= next_modbus_tx_time) {
+    constructFrame(&testPacket);
+    modbusTxLen = getFrame(&modbusTxBuf);
+    if (modbusTxLen > 2) {
+      lcd.setCursor(0, 1);
+      lcd.print("TX");
+      modbusWrite(modbusTxBuf, modbusTxLen);
+      txCount++;
+      lcd.setCursor(0, 1);
+      lcd.print("  ");
+    }
+    next_modbus_tx_time = millis() + POLL_TIME;
+    modbus_rx_timeout = millis() + MODBUS_RX_TIMEOUT;
+    modbus_rx_started = false;
+  }
+
+  // modbus sentence received?
+  if (modbusRead()) {
+    modbus_rx_started = false;    // reset for next time
+    debug("Modbus RX %d bytes: ", modbus_rx_count);
+    for (i=0; i<modbus_rx_count; i++) {
       debug("<%02X> ", modbusRxBuf[i]);
     }
-    debug("\n");   
+    debug("\n");
+    lcd.setCursor(13, 0);
+    if (modbusRxBuf[0] == modbusSvrAddress) {    
+      lcd.print("OK    ");
+    } else {
+      lcd.print("NO GO ");
+    }
   }
 
-  lcd.setCursor(13, 0);
-  if (modbusRxBuf[0] == modbusSvrAddress) {
-    lcd.print("OK    ");
-  }
-  else {
+  // timeout
+  if (millis() > modbus_rx_timeout) {
+    modbus_rx_started = false;    // reset for next time
+    lcd.setCursor(13, 0);
     lcd.print("NO GO ");
-    lcd.setBacklight(0);
-    delay(400);
-    lcd.setBacklight(1);
-  } 
+  }
 }
 
+bool readButtonInput() {  // returns true if button has been activated
+  bool retVal = false;
+  // read button input
+  if (millis() < button_debounce_time ) return retVal;  // do not read button during debounce time
+  if(!digitalRead(BUTTON_PIN)) {  // button pressed
+    if (!button_shadow) {   // detect leading edge
+      //debug("Button activated\n");
+      button_shadow = true;
+      button_time = millis();
+      button_debounce_time = button_time + BUTTON_DEBOUNCE_TIME;
+    }
+  } else {    // button not pressed
+    if (button_shadow) {   // detect trailing edge
+      button_shadow = false;
+      if ( (millis() - button_time) > BUTTON_LONGPRESS_TIME ) {
+        button_activated_long = true;
+      } else {
+        button_activated = true;
+      }
+      button_debounce_time = button_time + BUTTON_DEBOUNCE_TIME;
+      retVal = true;
+    }
+  } 
+  return retVal;   
+}
+
+void respondToButton () {
+  //debug("responding to button %d %d\n", button_activated, button_activated_long);
+  if (button_activated_long) {
+    button_activated_long = false;
+  }
+
+  if (button_activated) {
+    if (configMode) {
+      configMode = false;
+      runMode = true;
+    } else {
+      if (runMode) {
+        configMode = true;
+        runMode = false;
+      }
+    }
+  button_activated = false;  
+  }
+  //debug("Config: %d Run: %d\n",configMode, runMode);
+}
 
 void loop() {
-  inputRead();
-  if (inputState == Middle) {
-    runLoop();
-  } else {
+  if (configMode) { 
     configLoop();
   }
-
-  /*
-    if (show == 0) {
-    lcd.setBacklight(255);
-    lcd.home(); lcd.clear();
-    lcd.print("Hello LCD");
-    delay(1000);
-
-    lcd.setBacklight(0);
-    delay(400);
-    lcd.setBacklight(255);
-
-  } else if (show == 1) {
-    lcd.clear();
-    lcd.print("Cursor On");
-    lcd.cursor();
-
-  } else if (show == 2) {
-    lcd.clear();
-    lcd.print("Cursor Blink");
-    lcd.blink();
-
-  } else if (show == 3) {
-    lcd.clear();
-    lcd.print("Cursor OFF");
-    lcd.noBlink();
-    lcd.noCursor();
-
-  } else if (show == 4) {
-    lcd.clear();
-    lcd.print("Display Off");
-    lcd.noDisplay();
-
-  } else if (show == 5) {
-    lcd.clear();
-    lcd.print("Display On");
-    lcd.display();
-
-  } else if (show == 7) {
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print("*** first line.");
-    lcd.setCursor(0, 1);
-    lcd.print("*** second line.");
-
-  } else if (show == 8) {
-    lcd.scrollDisplayLeft();
-  } else if (show == 9) {
-    lcd.scrollDisplayLeft();
-  } else if (show == 10) {
-    lcd.scrollDisplayLeft();
-  } else if (show == 11) {
-    lcd.scrollDisplayRight();
-  } // if
-
-  delay(1000);
-  show = (show + 1) % 12;
-  */
+  else {
+    runLoop();
+  }
+  if (readButtonInput()) {
+    respondToButton();
+  }
 }
-
-
 
 
