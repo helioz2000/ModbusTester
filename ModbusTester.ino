@@ -47,6 +47,8 @@ enum debugLevels {
   L_INFO
 };
 
+#define DEBUG_LEVEL_DEFAULT L_OFF;
+
 typedef struct  {
   baudrate_t  baudrate;
   byte dataFunction;            // e.g. 3=Read Holding
@@ -159,13 +161,6 @@ void config_modbus() {
   lcd.print(modbusSvrAddress);
 
   modbus_rx_frame_timeout = endOfFrameTimeout(baud_rate[activeModbusConfig->baudrate]);
-  
-  testPacket.id = modbusSvrAddress;
-  testPacket.function = activeModbusConfig->dataFunction;
-  testPacket.address = activeModbusConfig->dataRegister;
-  testPacket.no_of_registers = activeModbusConfig->dataLength;
-  testPacket.register_array = NULL;
-  makeModbusFrame();
   modbus_rx_state = MODBUS_RX_IDLE;
 }
 
@@ -173,14 +168,15 @@ void setup_modbus() {
   // Westmont modbus parameters
   modbusWestmont.baudrate = b19200;
   modbusWestmont.dataFunction = READ_HOLDING_REGISTERS;
-  modbusWestmont.dataRegister = 4099;
-  modbusWestmont.dataLength = 1;
+  modbusWestmont.dataRegister = 4119;
+  modbusWestmont.dataLength = 2;
   modbusWestmont.dataFormat = 0;
 
   pinMode(MODBUS_TX_ENABLE_PIN, OUTPUT);
   digitalWrite(MODBUS_TX_ENABLE_PIN, LOW);
   
   config_modbus();
+  makeModbusFrame();
 }
 
 void setup_LCD() {
@@ -214,7 +210,7 @@ void setup_encoder() {
 }
 
 void setup() {
-  currentDebugLevel = L_OFF;
+  currentDebugLevel = DEBUG_LEVEL_DEFAULT;
   setup_serial();
   setup_LCD();
   setup_modbus();
@@ -273,9 +269,9 @@ bool modbusRead() { // returns true when modbus reive is completed
 void makeModbusFrame() {
   
   testPacket.id = modbusSvrAddress;
-  testPacket.function = READ_HOLDING_REGISTERS;
-  testPacket.address = 4099;
-  testPacket.no_of_registers = 1;
+  testPacket.function = activeModbusConfig->dataFunction;
+  testPacket.address = activeModbusConfig->dataRegister;
+  testPacket.no_of_registers = activeModbusConfig->dataLength;
   testPacket.register_array = NULL;
   
   constructFrame(&testPacket);
@@ -327,9 +323,34 @@ void configLoop() {
   }
 }
 
-void runLoop() {
-  int i;
+void evaluate_reply() {
+    modbus_rx_wait = false;
+    debug(L_DEBUG, "Modbus RX %d bytes: ", modbus_rx_count);
+    for (int i=0; i<modbus_rx_count; i++) {
+      debug(L_DEBUG, "<%02X> ", modbusRxBuf[i]);
+    }
+    debug(L_DEBUG, "\n");
+    lcd.setCursor(12, 0);
+    if (modbusRxBuf[0] == modbusSvrAddress) {    
+      lcd.print("OK");
+    } else {
+      lcd.print("--");
+    }
+    modbus_rx_count = 0;
+    next_modbus_tx_time = millis() + MODBUS_POLL_TIME;
+    lcd.setCursor(19, 0);
+    lcd.write(SPACE);
+    if (activeModbusConfig == &modbusWestmont) {
+      lcd.setCursor(0,1);
+      if (modbusRxBuf[3]==0 && modbusRxBuf[4]==0 && modbusRxBuf[5]==0 && modbusRxBuf[6]==0) { // no reading from meter
+        lcd.print("Meter not detected");
+      } else { // we have a reading
+        lcdPrint("AEE: %02x %02x %02x %02x", modbusRxBuf[3], modbusRxBuf[4], modbusRxBuf[5], modbusRxBuf[6]); // display in hex format
+      }
+    }
+}
 
+void runLoop() {
   // execute once when switching into run mode
   if (!runModeShadow) {
     lcd.noBlink();
@@ -358,34 +379,17 @@ void runLoop() {
     lcd.write(126);
   }
 
-  if (modbus_rx_wait) {
-    
-  }
   // modbus sentence received?
   if (modbusRead()) {
-    modbus_rx_wait = false;
-    debug(L_DEBUG, "Modbus RX %d bytes: ", modbus_rx_count);
-    for (i=0; i<modbus_rx_count; i++) {
-      debug(L_DEBUG, "<%02X> ", modbusRxBuf[i]);
-    }
-    debug(L_DEBUG, "\n");
-    lcd.setCursor(12, 0);
-    if (modbusRxBuf[0] == modbusSvrAddress) {    
-      lcd.print("OK");
-    } else {
-      lcd.print("--");
-    }
-    modbus_rx_count = 0;
-    next_modbus_tx_time = millis() + MODBUS_POLL_TIME;
-    lcd.setCursor(19, 0);
-    lcd.write(SPACE);
+    evaluate_reply();
   }
 
+/*
   if (modbus_rx_wait) {
     lcd.setCursor(19, 0);
     lcd.write(127);
   }
-
+*/
   // timeout
   if ((millis() > modbus_rx_timeout) && modbus_rx_wait) {
     modbus_rx_state = MODBUS_RX_IDLE;    // reset for next time
