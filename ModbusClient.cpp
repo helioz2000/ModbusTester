@@ -450,3 +450,27 @@ void sendPacket(unsigned char bufferSize)
     
   previousTimeout = millis(); // initialize timeout delay 
 }
+
+unsigned long endOfFrameTimeout(unsigned long baudrate) {
+  // frame timeout is 3.5 charcters, we assume 10bit per char
+  // returns timeout in ms
+  switch (baudrate) {
+    case 300: return(117);
+      break;
+    case 600: return(59);
+      break;
+    case 1200: return(30);
+      break;
+    case 2400: return(15);
+      break;
+    case 4800: return(8);
+      break;
+    case 9600: return(4);
+      break;
+    case 19200: return(2);
+      break;
+    default: return(2);
+      break;
+  }
+}
+

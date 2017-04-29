@@ -145,5 +145,5 @@ unsigned int modbus_update(ModbusPacket* packets);
 void modbus_configure(long baud, unsigned int _timeout, unsigned int _polling, 
                       unsigned char _retry_count, unsigned char _TxEnablePin,
                       ModbusPacket* packets, unsigned int _total_no_of_packets);
-
+unsigned long endOfFrameTimeout(unsigned long baudrate);
 #endif
