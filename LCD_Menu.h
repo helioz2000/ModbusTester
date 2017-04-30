@@ -9,7 +9,7 @@ typedef struct {
   char text[20];
   uint8_t datacolumn;
   int datamin;
-  int datamax;
+  unsigned int datamax;
 } menu_item;
 
 class LCD_Menu {
@@ -17,12 +17,14 @@ class LCD_Menu {
     LCD_Menu(uint8_t rows, uint8_t columns);
     void setMenuItems(menu_item* menuitems, uint8_t number_of_items);
     void updateLCD();
-    void uiUp();
-    void uiDown();
+    void moveUp();
+    void moveDown();
     void uiSelect(bool longPress);
     bool getEditMode();
     int  getSelectedMenuItem();
     void updateSelectedMenuItemValue();
+    void begin();
+    void end();
 
     void setCallbackValueChange(void (*changeMenuItemValue)(int));
     void setCallbackValueGet(int (*getMenuItemValue)(int));
