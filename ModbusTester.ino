@@ -71,7 +71,7 @@ typedef struct  {
 #define MODBUS_RX_PIN 10          // D10 on nano board
 #define MODBUS_TX_PIN 11          // D11 on nano board
 #define MODBUS_TX_ENABLE_PIN  12  // D12 on nano board
-#define MODBUS_RX_BUF_LEN 128     // Modbus RX buffer size in bytes
+#define MODBUS_RX_BUF_LEN 32      // Modbus RX buffer size in bytes
 #define MODBUS_RX_IDLE false      // Modbus RX state
 #define MODBUS_RX_ACTIVE true     // Modbus RX state
 #define MODBUS_RX_TIMEOUT 500UL   // [ms] time to wait for reply
@@ -141,13 +141,18 @@ void debug(debugLevels level, char *sFmt, ...)
 }
 
 // convert 4 bytes into 32bit IEEE 754 floating point
-float convertToFloat (byte b1, byte b2, byte b3, byte b4 ) {
-  float x;
-  ((byte*)&x)[3]= b1;
-  ((byte*)&x)[2]= b2;
-  ((byte*)&x)[1]= b3;
-  ((byte*)&x)[0]= b4;
-  return x;
+float convertToFloat (uint8_t b1, uint8_t b2, uint8_t b3, uint8_t b4 ) {
+
+  union u_tag {
+    byte b[4];
+    float fval;
+  } u;
+
+  u.b[0] = b4;
+  u.b[1] = b3;
+  u.b[2] = b2;
+  u.b[3] = b1;
+  return u.fval;
 }
 
 /*
@@ -307,6 +312,11 @@ void setup_modbus() {
 
 void modbusWrite(unsigned char *txBuf, unsigned int txLen) { 
 
+  // clear receive buffer
+  for (int i=0; i < MODBUS_RX_BUF_LEN; i++) {
+    modbusRxBuf[i] = 0;
+  }
+  
   // switch RS485 driver to TX
   digitalWrite(MODBUS_TX_ENABLE_PIN, HIGH);
 
@@ -351,9 +361,14 @@ void modbusEvaluateReply() {
       lcd.setCursor(0,2);
       lcd.print(CLR_LINE);
     } else { // we have a reading
-      lcdPrint("AEI: %02x %02x %02x %02x", modbusRxBuf[3], modbusRxBuf[4], modbusRxBuf[5], modbusRxBuf[6]); // display in hex format
-      lcd.setCursor(0,2);
-      lcdPrint("AEI: %.1f", convertToFloat(modbusRxBuf[3], modbusRxBuf[4], modbusRxBuf[5], modbusRxBuf[6]) );
+      lcd.print(CLR_LINE);
+      lcd.setCursor(0,1);
+      lcd.print("AEI: ");
+      lcd.print(convertToFloat( modbusRxBuf[3], modbusRxBuf[4], modbusRxBuf[5], modbusRxBuf[6]) );
+      lcd.print("kWh");
+      // print raw data
+      //lcd.setCursor(0,2);
+      //lcdPrint("AEI: %02x %02x %02x %02x", modbusRxBuf[3], modbusRxBuf[4], modbusRxBuf[5], modbusRxBuf[6]); // display in hex format
     }
   } else { // show raw output
     for (i=0; i<activeModbusConfig->dataLength * 2; i+=2) {
